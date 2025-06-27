@@ -20,6 +20,9 @@ This analysis uses historical price data for **SOXL** (a 3x Leveraged ETF) at **
 - **SuperTrend** indicators
 - 15 engineered features derived from price, volume, and technical signals
 
+Jupyter Notebook: Run it in Google Collab
+-  https://github.com/cfphpflex/SuperTrend-Trading-Strategy---Exploratory-Data-Analysis-EDA-/blob/main/SuperTrend_Trading_EDA.ipynb
+
 ---
 
 ## 🧼 Data Quality and Cleaning
