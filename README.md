@@ -1,7 +1,5 @@
 # 📊 Capstone Module: Initial Report and Exploratory Data Analysis
 
-**Author**: Trading System Analysis Team  
-**Date**: June 26, 2025
 
 ---
 
