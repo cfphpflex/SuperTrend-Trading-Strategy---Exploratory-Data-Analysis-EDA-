@@ -13,7 +13,8 @@
 
 ## 📚 Dataset Overview
 
-This analysis uses historical price data for **SOXL** (a 3x Leveraged ETF) at **10-minute intervals**, including:
+This analysis uses historical price data for **SOXL** (a 3x Leveraged ETF) at **10-minute intervals**, including several years of price data (6.43 MB)
+
 
 - **OHLCV**: Open, High, Low, Close, Volume
 - **SuperTrend** indicators
@@ -23,7 +24,7 @@ This analysis uses historical price data for **SOXL** (a 3x Leveraged ETF) at **
 
 ## 🧼 Data Quality and Cleaning
 
-- ✅ Successfully loaded and cleaned SOXL 10-minute price data  
+- ✅ Successfully loaded and cleaned SOXL 10-minute price data  (years worth 6.43 MB)
 - ✅ Removed duplicates and handled missing values  
 - ✅ Detected and addressed outliers  
 - ✅ Engineered 15 technical features for in-depth analysis  
