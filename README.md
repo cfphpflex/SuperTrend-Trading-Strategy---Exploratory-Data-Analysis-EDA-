@@ -1,5 +1,4 @@
-# 📊 Capstone Module: Initial Report and Exploratory Data Analysis
-
+# 📊 Profitable trading strategy: SOXL Exploratory Data Analysis
 
 ---
 
