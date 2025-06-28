@@ -83,3 +83,79 @@ Jupyter Notebook: Run it in Google Collab
 ## ✅ Summary
 
 This initial analysis lays a strong foundation for building a **SuperTrend-enhanced trading strategy** powered by **machine learning**. The next module will focus on optimizing predictive models and integrating them into a real-world trading framework.
+
+
+
+
+python build_proper_cache.py -s CYN -t 1Min -d 365
+python build_proper_cache.py -s CYN -t 5Min -d 365
+python build_10min_from_1min.py --symbol CYN --days 365
+
+
+python build_proper_cache.py -s SOXL -t 5Min -d 365
+python build_proper_cache.py -s SOXL -t 10Min -d 365
+python build_30min_from_1min.py --symbol NVDA --days 365
+
+python build_proper_cache.py -s SMCI -t 1Min -d 365
+python build_proper_cache.py -s SMCI -t 5Min -d 365
+python build_10min_from_1min.py --symbol SMCI --days 365
+
+
+python build_proper_cache.py -s SOXL -t 10Min -d 365
+python build_proper_cache.py -s NVDA -t 5Min -d 365
+python build_proper_cache.py -s TSLA -t 5Min -d 365
+python build_proper_cache.py -s CRCL -t 1Min -d 150
+python build_proper_cache.py -s CRCL -t 5Min -d 150
+python build_proper_cache.py -s TQQQ -t 5Min -d 365
+
+python build_proper_cache.py -s META -t 5Min -d 365
+python build_10min_from_1min.py --symbol SOXL --days 1850      5 years
+
+
+ 
+python build_5min_from_1min.py --symbol SOXL
+
+
+-- NEW 062425 analyze_trades_supertrend
+python analyze_trades_supertrend.py
+
+
+python verify_system_status.py
+
+BACKTEST
+# SOXL
+
+=====FINAL WIN TESTS=====>>>>>>  WINNER------WINNER-------WINNER  10Min---WINNER-WINNER----WINNER---WINNER <<<<<<==========
+
+ 
+# SOXL OPTIMIZE & NON-OPTIZE
+
+#optimize stop loss & risk_per_trade
+
+python analyze_trades_supertrend.py --symbol SOXL --timeframe 10Min --initial_capital 1000 --start_date 2020-01-01 --end_date 2025-06-25 --enhanced --compounded --optimize  --risk_per_trade 0.01 --stop_loss_range 1 12 --optimization_iterations 100
+
+python analyze_trades_supertrend.py --symbol CYN --timeframe 10Min --initial_capital 1000 --start_date 2020-01-01 --end_date 2025-06-25 --enhanced --compounded --optimize  --risk_per_trade 0.01  --stop_loss_range 1 12 --optimization_iterations 100
+
+# NON-Optimzied  1 yr
+python analyze_trades_supertrend.py --symbol SOXL --timeframe 10Min --initial_capital 50000 --start_date 2024-06-01 --end_date 2025-06-26 --enhanced --skip_optimization --compounded --risk_per_trade 0.01 --stop_loss_pct 1.0
+
+# TQQQ
+python analyze_trades_supertrend.py --symbol TQQQ --timeframe 10Min --initial_capital 1000 --start_date 2024-06-01 --end_date 2025-06-25 --enhanced --skip_optimization --compounded
+ 
+# CRCL
+ 
+python analyze_trades_supertrend.py --symbol CRCL --timeframe 1Min --initial_capital 10000 --start_date 2025-06-01 --end_date 2025-06-26 --enhanced --skip_optimization --compounded
+
+
+
+===LIVE==>>>>>>  LIVE  SuperTRend BEST 062425  <<<<<<<------LIVE------->>>>>>>  
+python supertrend_1d_live_trader.py
+
+RUNNING: 06/26/25
+python supertrend_1d_live_trader.py --symbol SOXL --timeframe 10Min --initial_capital 100000 --interval 30 --risk-per-trade 0.01 --interval 60
+
+python supertrend_1d_live_trader.py --symbol TQQQ --timeframe 10Min --initial_capital 100000 --interval 30 --risk-per-trade 0.01 --interval 60
+
+python supertrend_1d_live_trader.py --symbol CRCL --timeframe 10Min --initial_capital 100000 --interval 30 --risk-per-trade 0.01 --interval 60
+
+
