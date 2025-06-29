@@ -1,0 +1,36 @@
+{
+  "optimal_configuration": {
+    "supertrend_period": 12,
+    "supertrend_multiplier": 2.0,
+    "risk_per_trade": 0.01,
+    "adx_threshold": 30,
+    "volume_ratio_threshold": 1.0,
+    "atr_stop_multiplier": 1.8
+  },
+  "performance_metrics": {
+    "baseline_profit_per_1000": 338.56,
+    "optimized_profit_per_1000": 402.48,
+    "improvement_dollars": 63.92,
+    "improvement_percentage": 18.9,
+    "total_return": 40.25,
+    "baseline_return": 33.86
+  },
+  "validation_results": {
+    "date_range": "2022-06-28 to 2025-06-28",
+    "total_trades": 627,
+    "win_rate": 32.1,
+    "total_pnl": 40247.58,
+    "average_trade": -95.30
+  },
+  "grid_search_summary": {
+    "total_combinations_tested": 972,
+    "combinations_reduced_from": 82320,
+    "time_savings": "99%",
+    "best_config_rank": 1
+  },
+  "usage_instructions": {
+    "main_strategy_file": "analyze_trades_supertrend.py",
+    "grid_search_file": "grid_search_supertrend.py",
+    "command": "python analyze_trades_supertrend.py --symbol SOXL --timeframe 10Min --start_date 2022-06-28 --end_date 2025-06-28"
+  }
+} 
