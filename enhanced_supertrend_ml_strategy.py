@@ -1,42 +1,75 @@
 #!/usr/bin/env python3
 """
-Enhanced SuperTrend + ML Trading Strategy
-Combines EDA insights with SuperTrend signals for improved performance.
+Enhanced SuperTrend Strategy with ML Integration
+Baseline: $50K → $110K (120% return) - TARGET: IMPROVE THIS
 
-Key Features:
-1. SuperTrend indicator signals
-2. ML predictions from EDA analysis
-3. Time-based choppiness filters
-4. Risk management and position sizing
-5. Performance tracking
+ML Enhancements:
+1. XGBoost Signal Validation - Use existing indicators as features
+2. VIX-based Risk Management - Dynamic position sizing
+3. ADX Trend Filtering - Only trade strong trends
+4. Donchian Channel Confirmation - Validate breakouts
+
+Goal: Increase final capital above $110,024.28 with reduced drawdown
 """
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+import seaborn as sns
+from datetime import datetime, timedelta
 import warnings
+from typing import Dict, List, Tuple, Any, Optional
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import IsolationForest
+import xgboost as xgb
+from sklearn.svm import SVC
+import joblib
+
 warnings.filterwarnings('ignore')
 
 class EnhancedSuperTrendMLStrategy:
-    """Enhanced SuperTrend strategy with ML integration"""
+    """
+    Enhanced SuperTrend strategy with ML integration
+    Target: >$110,024.28 final capital with reduced drawdown
+    """
     
-    def __init__(self, initial_capital=100000, risk_per_trade=0.02, 
-                 ml_confidence_threshold=0.6, supertrend_weight=0.7, ml_weight=0.3):
+    def __init__(self, 
+                 initial_capital: float = 50000,
+                 risk_per_trade: float = 0.01,  # 1% risk per trade
+                 supertrend_period: int = 10,
+                 supertrend_multiplier: float = 3.0):
+        
         self.initial_capital = initial_capital
         self.capital = initial_capital
         self.risk_per_trade = risk_per_trade
-        self.ml_confidence_threshold = ml_confidence_threshold
-        self.supertrend_weight = supertrend_weight
-        self.ml_weight = ml_weight
-        self.position = None
-        self.trades = []
-        self.ml_model = None
+        self.supertrend_period = supertrend_period
+        self.supertrend_multiplier = supertrend_multiplier
         
-    def calculate_supertrend(self, df, period=10, multiplier=3):
-        """Calculate SuperTrend indicator"""
+        # ML Models
+        self.xgb_model = None
+        self.vix_anomaly_model = None
+        self.scaler = StandardScaler()
+        
+        # Performance tracking
+        self.trades = []
+        self.signal_history = []
+        self.current_position = None
+        self.peak_capital = initial_capital
+        
+        print(f"🎯 Target: Improve on baseline $110,024.28 final capital")
+        print(f"🤖 ML Enhancements: XGBoost + VIX + ADX + Donchian")
+        
+    def calculate_supertrend(self, df: pd.DataFrame, period: int = None, multiplier: float = None) -> pd.DataFrame:
+        """Calculate SuperTrend indicator (baseline method) with optional period and multiplier for multi-timeframe support"""
+        df = df.copy()
+        
+        # Use provided period/multiplier or defaults
+        if period is None:
+            period = self.supertrend_period
+        if multiplier is None:
+            multiplier = self.supertrend_multiplier
+        
         # Calculate True Range (TR)
         df['tr1'] = abs(df['high'] - df['low'])
         df['tr2'] = abs(df['high'] - df['close'].shift(1))
@@ -87,403 +120,611 @@ class EnhancedSuperTrendMLStrategy:
         
         return df
     
-    def engineer_features(self, df):
-        """Engineer features for ML model based on EDA insights"""
-        # Price-based features
-        df['price_change'] = df['close'].pct_change()
-        df['price_change_abs'] = df['price_change'].abs()
-        df['high_low_ratio'] = df['high'] / df['low']
-        df['open_close_ratio'] = df['close'] / df['open']
+    def calculate_adx(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """Calculate ADX (Average Directional Index) for trend strength"""
+        df = df.copy()
         
-        # Volume-based features
-        df['volume_change'] = df['volume'].pct_change()
-        df['volume_ma_5'] = df['volume'].rolling(window=5).mean()
-        df['volume_ratio'] = df['volume'] / df['volume_ma_5']
+        # Calculate +DM and -DM
+        df['high_diff'] = df['high'] - df['high'].shift(1)
+        df['low_diff'] = df['low'].shift(1) - df['low']
         
-        # Volatility features
-        df['volatility'] = df['price_change'].rolling(window=10).std()
-        df['atr'] = df['high_low_ratio'].rolling(window=10).mean()
+        df['plus_dm'] = np.where((df['high_diff'] > df['low_diff']) & (df['high_diff'] > 0), df['high_diff'], 0)
+        df['minus_dm'] = np.where((df['low_diff'] > df['high_diff']) & (df['low_diff'] > 0), df['low_diff'], 0)
         
-        # Moving averages
-        df['ma_5'] = df['close'].rolling(window=5).mean()
-        df['ma_10'] = df['close'].rolling(window=10).mean()
-        df['ma_20'] = df['close'].rolling(window=20).mean()
+        # Calculate smoothed values
+        df['plus_di'] = 100 * (df['plus_dm'].rolling(window=period).mean() / df['atr'])
+        df['minus_di'] = 100 * (df['minus_dm'].rolling(window=period).mean() / df['atr'])
         
-        # Price position relative to moving averages
-        df['price_vs_ma5'] = df['close'] / df['ma_5'] - 1
-        df['price_vs_ma10'] = df['close'] / df['ma_10'] - 1
-        df['price_vs_ma20'] = df['close'] / df['ma_20'] - 1
+        # Calculate DX and ADX
+        df['dx'] = 100 * abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])
+        df['adx'] = df['dx'].rolling(window=period).mean()
         
-        # Time-based features (from EDA insights)
-        df['hour'] = df['timestamp'].dt.hour
-        df['day_of_week'] = df['timestamp'].dt.dayofweek
-        df['is_market_open'] = ((df['hour'] >= 9) & (df['hour'] < 16)).astype(int)
-        
-        # SuperTrend features
-        df['price_vs_supertrend'] = df['close'] - df['supertrend']
-        df['supertrend_distance'] = abs(df['price_vs_supertrend']) / df['close']
-        
-        # Target variable for classification (next bar direction)
-        df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+        # Clean up temporary columns
+        df = df.drop(['high_diff', 'low_diff', 'plus_dm', 'minus_dm', 'dx'], axis=1)
         
         return df
     
-    def train_ml_model(self, df):
-        """Train machine learning model"""
-        print("🤖 Training ML model...")
+    def calculate_donchian_channels(self, df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+        """Calculate Donchian Channels for support/resistance"""
+        df = df.copy()
         
-        # Select features for the model
+        df['donchian_upper'] = df['high'].rolling(window=period).max()
+        df['donchian_lower'] = df['low'].rolling(window=period).min()
+        df['donchian_middle'] = (df['donchian_upper'] + df['donchian_lower']) / 2
+        
+        # Calculate breakout signals
+        df['upper_breakout'] = (df['close'] - df['donchian_upper']) / df['atr']
+        df['lower_breakout'] = (df['donchian_lower'] - df['close']) / df['atr']
+        
+        return df
+    
+    def calculate_vix_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate VIX-based features for risk management"""
+        df = df.copy()
+        
+        # Simulate VIX (using price volatility as proxy)
+        df['price_change'] = df['close'].pct_change()
+        df['vix_proxy'] = df['price_change'].rolling(window=20).std() * np.sqrt(252) * 100
+        
+        # VIX-based features
+        df['vix_ma'] = df['vix_proxy'].rolling(window=20).mean()
+        df['vix_ratio'] = df['vix_proxy'] / df['vix_ma']
+        df['vix_regime'] = pd.cut(df['vix_proxy'], 
+                                 bins=[0, 15, 25, 50, 100], 
+                                 labels=['low', 'normal', 'high', 'extreme'])
+        
+        return df
+    
+    def create_ml_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create ML features from technical indicators"""
+        df = df.copy()
+        
+        # Multi-timeframe SuperTrend
+        df['supertrend_5'] = self.calculate_supertrend(df, period=5)['supertrend_direction']
+        df['supertrend_10'] = self.calculate_supertrend(df, period=10)['supertrend_direction']
+        df['supertrend_20'] = self.calculate_supertrend(df, period=20)['supertrend_direction']
+        
+        # Volume features
+        df['volume_ma'] = df['volume'].rolling(window=20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_ma']
+        df['volume_trend'] = df['volume'].rolling(window=5).mean() / df['volume'].rolling(window=20).mean()
+        
+        # Price momentum features
+        df['price_momentum'] = df['close'].pct_change(5)
+        df['price_acceleration'] = df['price_momentum'].diff()
+        
+        # ATR features
+        df['atr_ratio'] = df['atr'] / df['atr'].rolling(window=20).mean()
+        df['atr_trend'] = df['atr'].rolling(window=5).mean() / df['atr'].rolling(window=20).mean()
+        
+        # ADX trend strength
+        adx_cat = pd.cut(df['adx'], 
+                        bins=[0, 25, 50, 100], 
+                        labels=[0, 1, 2], 
+                        include_lowest=True)
+        first_cat = adx_cat.cat.categories[0]
+        df['adx_strength'] = adx_cat.fillna(first_cat).astype(int)
+        
+        # Donchian features
+        df['donchian_position'] = (df['close'] - df['donchian_lower']) / (df['donchian_upper'] - df['donchian_lower'])
+        df['donchian_width'] = (df['donchian_upper'] - df['donchian_lower']) / df['close']
+        
+        return df
+    
+    def train_xgboost_model(self, df: pd.DataFrame) -> None:
+        """Train XGBoost model for signal validation"""
+        print("🤖 Training XGBoost model for signal validation...")
+        
+        # Create features
         feature_columns = [
-            'price_change', 'price_change_abs', 'high_low_ratio', 'open_close_ratio',
-            'volume_change', 'volume_ratio', 'volatility', 'atr',
-            'price_vs_ma5', 'price_vs_ma10', 'price_vs_ma20',
-            'hour', 'day_of_week', 'is_market_open',
-            'price_vs_supertrend', 'supertrend_distance'
+            'supertrend_5', 'supertrend_10', 'supertrend_20',
+            'volume_ratio', 'volume_trend',
+            'price_momentum', 'price_acceleration',
+            'atr_ratio', 'atr_trend',
+            'adx_strength', 'plus_di', 'minus_di',
+            'donchian_position', 'donchian_width',
+            'upper_breakout', 'lower_breakout',
+            'vix_ratio'
         ]
         
-        # Remove rows with missing values
-        ml_data = df[feature_columns + ['target']].dropna()
+        # Create target (future returns)
+        df['future_return'] = df['close'].shift(-1) / df['close'] - 1
+        df['target'] = np.where(df['future_return'] > 0.005, 1, 0)  # 0.5% threshold
         
-        X = ml_data[feature_columns]
-        y = ml_data['target']
+        # Remove NaN values
+        df_clean = df.dropna()
         
-        # Split the data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+        if len(df_clean) < 100:
+            print("⚠️ Insufficient data for ML training, using baseline signals")
+            return
         
-        # Train Random Forest model
-        model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        model.fit(X_train, y_train)
+        # Prepare features and target
+        X = df_clean[feature_columns].fillna(0)
+        y = df_clean['target']
         
-        # Evaluate the model
-        y_pred = model.predict(X_test)
-        accuracy = accuracy_score(y_test, y_pred)
-        print(f"✅ ML Model trained successfully")
-        print(f"📊 Model Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
-        print(f"📊 Baseline Accuracy: {max(y_test.mean(), 1-y_test.mean()):.4f} ({max(y_test.mean(), 1-y_test.mean())*100:.2f}%)")
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         
-        return model
+        # Scale features
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_test_scaled = self.scaler.transform(X_test)
+        
+        # Train XGBoost model
+        self.xgb_model = xgb.XGBClassifier(
+            n_estimators=100,
+            learning_rate=0.1,
+            max_depth=6,
+            min_child_weight=1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        
+        self.xgb_model.fit(X_train_scaled, y_train)
+        
+        # Evaluate model
+        train_score = self.xgb_model.score(X_train_scaled, y_train)
+        test_score = self.xgb_model.score(X_test_scaled, y_test)
+        
+        print(f"✅ XGBoost trained - Train accuracy: {train_score:.3f}, Test accuracy: {test_score:.3f}")
     
-    def get_combined_signal(self, supertrend_signal, ml_prediction, ml_confidence):
-        """Combine SuperTrend and ML signals with weights"""
-        # Convert ML prediction to -1/1
-        ml_signal = 1 if ml_prediction == 1 else -1
+    def train_vix_anomaly_model(self, df: pd.DataFrame) -> None:
+        """Train VIX anomaly detection model"""
+        print("🛡️ Training VIX anomaly detection model...")
         
-        # Weighted combination
-        combined_signal = (self.supertrend_weight * supertrend_signal + 
-                          self.ml_weight * ml_signal * ml_confidence)
+        # Use VIX proxy for anomaly detection
+        vix_data = df['vix_proxy'].dropna().values.reshape(-1, 1)
+        
+        if len(vix_data) < 50:
+            print("⚠️ Insufficient VIX data, using baseline risk management")
+            return
+        
+        self.vix_anomaly_model = IsolationForest(
+            contamination=0.1,  # 10% of data as anomalies
+            random_state=42
+        )
+        
+        self.vix_anomaly_model.fit(vix_data)
+        print("✅ VIX anomaly model trained")
+    
+    def get_ml_enhanced_signal(self, df: pd.DataFrame, i: int) -> Tuple[int, float, float]:
+        """Get ML-enhanced trading signal"""
+        if i < 50:  # Need enough data for ML features
+            return 0, 0.0, 1.0
+        
+        current_row = df.iloc[i]
+        
+        # Base SuperTrend signal
+        supertrend_signal = current_row['supertrend_direction']
+        
+        # 1. ADX Trend Filtering - Only trade strong trends
+        adx_strength = current_row.get('adx_strength', 0)
+        if adx_strength < 1:  # Weak trend
+            return 0, 0.0, 1.0
+        
+        # 2. Donchian Channel Confirmation
+        donchian_position = current_row.get('donchian_position', 0.5)
+        upper_breakout = current_row.get('upper_breakout', 0)
+        lower_breakout = current_row.get('lower_breakout', 0)
+        
+        # 3. XGBoost Signal Validation
+        ml_confidence = 0.5  # Default confidence
+        
+        if self.xgb_model is not None:
+            try:
+                # Prepare features for ML prediction
+                feature_columns = [
+                    'supertrend_5', 'supertrend_10', 'supertrend_20',
+                    'volume_ratio', 'volume_trend',
+                    'price_momentum', 'price_acceleration',
+                    'atr_ratio', 'atr_trend',
+                    'adx_strength', 'plus_di', 'minus_di',
+                    'donchian_position', 'donchian_width',
+                    'upper_breakout', 'lower_breakout',
+                    'vix_ratio'
+                ]
+                
+                features = current_row[feature_columns].fillna(0).values.reshape(1, -1)
+                features_scaled = self.scaler.transform(features)
+                
+                # Get ML prediction and confidence
+                ml_prediction = self.xgb_model.predict(features_scaled)[0]
+                ml_confidence = self.xgb_model.predict_proba(features_scaled)[0].max()
+                
+            except Exception as e:
+                print(f"⚠️ ML prediction error: {e}")
+                ml_confidence = 0.5
+        
+        # 4. VIX-based Risk Management
+        risk_multiplier = 1.0
+        if self.vix_anomaly_model is not None:
+            try:
+                vix_value = current_row.get('vix_proxy', 20)
+                vix_anomaly = self.vix_anomaly_model.predict([[vix_value]])[0]
+                
+                if vix_anomaly == -1:  # Anomaly detected
+                    risk_multiplier = 0.5  # Reduce position size
+                elif vix_value > 30:  # High volatility
+                    risk_multiplier = 0.7
+                elif vix_value < 15:  # Low volatility
+                    risk_multiplier = 1.2
+                    
+            except Exception as e:
+                print(f"⚠️ VIX risk calculation error: {e}")
+        
+        # Combine signals
+        signal_strength = 0.0
+        
+        # SuperTrend base signal
+        if supertrend_signal == 1:
+            signal_strength += 0.3
+        elif supertrend_signal == -1:
+            signal_strength -= 0.3
+        
+        # Donchian confirmation
+        if supertrend_signal == 1 and upper_breakout > 0.5:
+            signal_strength += 0.2
+        elif supertrend_signal == -1 and lower_breakout > 0.5:
+            signal_strength -= 0.2
+        
+        # ML confidence boost
+        if ml_confidence > 0.7:
+            signal_strength *= 1.5
+        elif ml_confidence < 0.3:
+            signal_strength *= 0.5
         
         # Determine final signal
-        if combined_signal > 0.3:  # Threshold for long
-            return 1, combined_signal
-        elif combined_signal < -0.3:  # Threshold for short
-            return -1, combined_signal
+        if signal_strength > 0.3:
+            final_signal = 1  # Long
+        elif signal_strength < -0.3:
+            final_signal = -1  # Short
         else:
-            return 0, combined_signal  # Neutral
+            final_signal = 0  # Neutral
+        
+        return final_signal, signal_strength, risk_multiplier
     
-    def calculate_position_size(self, entry_price, stop_loss_price):
-        """Calculate position size based on risk management"""
-        risk_per_share = abs(entry_price - stop_loss_price)
-        risk_amount = self.capital * self.risk_per_trade
-        shares = int(risk_amount / risk_per_share)
-        return max(1, shares)  # Minimum 1 share
+    def calculate_dynamic_stop_loss(self, entry_price: float, direction: int, atr: float, vix_ratio: float) -> float:
+        """Calculate dynamic stop loss based on ATR and VIX"""
+        # Base ATR stop distance
+        base_stop_distance = atr * 1.5
+        
+        # VIX-adjusted stop distance
+        if vix_ratio > 1.5:  # High volatility
+            stop_distance = base_stop_distance * 1.2
+        elif vix_ratio < 0.8:  # Low volatility
+            stop_distance = base_stop_distance * 0.8
+        else:
+            stop_distance = base_stop_distance
+        
+        if direction == 1:  # Long
+            stop_loss = entry_price - stop_distance
+        else:  # Short
+            stop_loss = entry_price + stop_distance
+        
+        return stop_loss
     
-    def is_choppy_time(self, timestamp):
-        """Check if current time is prone to choppiness (from EDA insights)"""
-        hour = timestamp.hour
-        day = timestamp.strftime('%A')
+    def calculate_position_size(self, entry_price: float, stop_loss: float, risk_multiplier: float) -> int:
+        """Calculate position size with ML-enhanced risk management"""
+        # Base position size
+        risk_per_share = abs(entry_price - stop_loss)
+        base_risk_amount = self.capital * self.risk_per_trade
+        base_shares = int(base_risk_amount / risk_per_share)
         
-        # Avoid worst hours (from EDA analysis)
-        avoid_hours = [9, 15, 21]  # Hours with highest direction change rates
-        avoid_days = ['Saturday', 'Friday', 'Tuesday']
+        # ML risk adjustment
+        adjusted_shares = int(base_shares * risk_multiplier)
         
-        if hour in avoid_hours:
-            return True, f"Hour {hour} is in avoid list"
+        # Additional drawdown protection
+        current_drawdown = (self.peak_capital - self.capital) / self.peak_capital
+        if current_drawdown > 0.1:  # If drawdown > 10%
+            adjusted_shares = int(adjusted_shares * 0.7)
+        elif current_drawdown > 0.05:  # If drawdown > 5%
+            adjusted_shares = int(adjusted_shares * 0.85)
         
-        if day in avoid_days:
-            return True, f"{day} is in avoid list"
-            
-        return False, "Time OK"
+        return max(1, adjusted_shares)
     
-    def run_strategy(self, df):
-        """Run the enhanced SuperTrend + ML strategy"""
-        print("🚀 Running Enhanced SuperTrend + ML Strategy...")
+    def run_strategy(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Run the enhanced ML strategy"""
+        print("🚀 Running Enhanced SuperTrend ML Strategy...")
         
-        # Calculate SuperTrend
+        # Calculate all technical indicators
         df = self.calculate_supertrend(df)
+        df = self.calculate_adx(df)
+        df = self.calculate_donchian_channels(df)
+        df = self.calculate_vix_features(df)
+        df = self.create_ml_features(df)
         
-        # Engineer features
-        df = self.engineer_features(df)
+        # Train ML models
+        self.train_xgboost_model(df)
+        self.train_vix_anomaly_model(df)
         
-        # Train ML model
-        self.ml_model = self.train_ml_model(df)
+        # Initialize strategy variables
+        self.capital = self.initial_capital
+        self.peak_capital = self.initial_capital
+        self.trades = []
+        self.signal_history = []
+        self.current_position = None
         
-        # Feature columns for ML predictions
-        feature_columns = [
-            'price_change', 'price_change_abs', 'high_low_ratio', 'open_close_ratio',
-            'volume_change', 'volume_ratio', 'volatility', 'atr',
-            'price_vs_ma5', 'price_vs_ma10', 'price_vs_ma20',
-            'hour', 'day_of_week', 'is_market_open',
-            'price_vs_supertrend', 'supertrend_distance'
-        ]
-        
-        # Strategy execution
-        for i in range(20, len(df)):  # Start after enough data for indicators
+        # Run strategy
+        for i in range(50, len(df)):  # Start after ML features are available
             current_row = df.iloc[i]
+            current_price = current_row['close']
             
-            # Get SuperTrend signal
-            supertrend_signal = current_row['supertrend_direction']
+            # Update peak capital
+            if self.capital > self.peak_capital:
+                self.peak_capital = self.capital
             
-            # Get ML prediction
-            features = current_row[feature_columns].values.reshape(1, -1)
-            ml_prediction = self.ml_model.predict(features)[0]
-            ml_confidence = max(self.ml_model.predict_proba(features)[0])
+            # Get ML-enhanced signal
+            signal, signal_strength, risk_multiplier = self.get_ml_enhanced_signal(df, i)
             
-            # Get combined signal
-            combined_signal, signal_strength = self.get_combined_signal(supertrend_signal, ml_prediction, ml_confidence)
+            # Execute trades
+            if self.current_position is None:  # No position
+                if signal != 0:
+                    self.execute_ml_trade(signal, current_row, signal_strength, risk_multiplier)
+            else:  # Have position
+                # Check stop loss or take profit
+                if self.check_exit_conditions(current_row):
+                    self.close_position(current_price, self.current_position['type'])
+                # Check for signal reversal
+                elif signal != 0 and signal != self.current_position['type']:
+                    self.close_position(current_price, self.current_position['type'])
+                    self.execute_ml_trade(signal, current_row, signal_strength, risk_multiplier)
             
-            # Check choppiness filter
-            skip_trade, filter_reason = self.is_choppy_time(current_row['timestamp'])
-            
-            # Trading logic
-            if self.position is None:  # No position
-                if not skip_trade and combined_signal != 0 and ml_confidence >= self.ml_confidence_threshold:
-                    if combined_signal == 1:  # Long signal
-                        entry_price = current_row['close']
-                        stop_loss = entry_price * 0.95  # 5% stop loss
-                        shares = self.calculate_position_size(entry_price, stop_loss)
-                        
-                        self.position = {
-                            'side': 'long',
-                            'entry_price': entry_price,
-                            'entry_time': current_row['timestamp'],
-                            'entry_idx': i,
-                            'shares': shares,
-                            'stop_loss': stop_loss,
-                            'ml_confidence': ml_confidence,
-                            'supertrend_signal': supertrend_signal,
-                            'combined_signal': signal_strength
-                        }
-                        print(f"📈 LONG Entry: {current_row['timestamp']} @ ${entry_price:.2f}, {shares} shares")
-                        print(f"   ML Confidence: {ml_confidence:.3f}, SuperTrend: {supertrend_signal}, Combined: {signal_strength:.3f}")
-                        
-                    elif combined_signal == -1:  # Short signal
-                        entry_price = current_row['close']
-                        stop_loss = entry_price * 1.05  # 5% stop loss
-                        shares = self.calculate_position_size(entry_price, stop_loss)
-                        
-                        self.position = {
-                            'side': 'short',
-                            'entry_price': entry_price,
-                            'entry_time': current_row['timestamp'],
-                            'entry_idx': i,
-                            'shares': shares,
-                            'stop_loss': stop_loss,
-                            'ml_confidence': ml_confidence,
-                            'supertrend_signal': supertrend_signal,
-                            'combined_signal': signal_strength
-                        }
-                        print(f"📉 SHORT Entry: {current_row['timestamp']} @ ${entry_price:.2f}, {shares} shares")
-                        print(f"   ML Confidence: {ml_confidence:.3f}, SuperTrend: {supertrend_signal}, Combined: {signal_strength:.3f}")
-                elif skip_trade:
-                    print(f"⏭️ Skipped trade at {current_row['timestamp']}: {filter_reason}")
-            
-            else:  # Have position - check exit conditions
-                current_price = current_row['close']
-                bars_held = i - self.position['entry_idx']
-                
-                # Check stop loss
-                if self.position['side'] == 'long' and current_price <= self.position['stop_loss']:
-                    pnl = (current_price - self.position['entry_price']) * self.position['shares']
-                    self.capital += pnl
-                    self.trades.append({
-                        'side': 'long',
-                        'entry_time': self.position['entry_time'],
-                        'entry_price': self.position['entry_price'],
-                        'exit_time': current_row['timestamp'],
-                        'exit_price': current_price,
-                        'shares': self.position['shares'],
-                        'pnl': pnl,
-                        'exit_reason': 'stop_loss',
-                        'holding_bars': bars_held,
-                        'ml_confidence': self.position['ml_confidence'],
-                        'supertrend_signal': self.position['supertrend_signal'],
-                        'combined_signal': self.position['combined_signal']
-                    })
-                    print(f"🛑 LONG Stop Loss: {current_row['timestamp']} @ ${current_price:.2f}, PnL: ${pnl:.2f}")
-                    self.position = None
-                    
-                elif self.position['side'] == 'short' and current_price >= self.position['stop_loss']:
-                    pnl = (self.position['entry_price'] - current_price) * self.position['shares']
-                    self.capital += pnl
-                    self.trades.append({
-                        'side': 'short',
-                        'entry_time': self.position['entry_time'],
-                        'entry_price': self.position['entry_price'],
-                        'exit_time': current_row['timestamp'],
-                        'exit_price': current_price,
-                        'shares': self.position['shares'],
-                        'pnl': pnl,
-                        'exit_reason': 'stop_loss',
-                        'holding_bars': bars_held,
-                        'ml_confidence': self.position['ml_confidence'],
-                        'supertrend_signal': self.position['supertrend_signal'],
-                        'combined_signal': self.position['combined_signal']
-                    })
-                    print(f"🛑 SHORT Stop Loss: {current_row['timestamp']} @ ${current_price:.2f}, PnL: ${pnl:.2f}")
-                    self.position = None
-                
-                # Check SuperTrend exit (after minimum holding period)
-                elif bars_held >= 20:  # Minimum 20 bars holding
-                    if (self.position['side'] == 'long' and supertrend_signal == -1) or \
-                       (self.position['side'] == 'short' and supertrend_signal == 1):
-                        
-                        if self.position['side'] == 'long':
-                            pnl = (current_price - self.position['entry_price']) * self.position['shares']
-                        else:
-                            pnl = (self.position['entry_price'] - current_price) * self.position['shares']
-                        
-                        self.capital += pnl
-                        self.trades.append({
-                            'side': self.position['side'],
-                            'entry_time': self.position['entry_time'],
-                            'entry_price': self.position['entry_price'],
-                            'exit_time': current_row['timestamp'],
-                            'exit_price': current_price,
-                            'shares': self.position['shares'],
-                            'pnl': pnl,
-                            'exit_reason': 'supertrend_exit',
-                            'holding_bars': bars_held,
-                            'ml_confidence': self.position['ml_confidence'],
-                            'supertrend_signal': self.position['supertrend_signal'],
-                            'combined_signal': self.position['combined_signal']
-                        })
-                        print(f"🔄 {self.position['side'].upper()} SuperTrend Exit: {current_row['timestamp']} @ ${current_price:.2f}, PnL: ${pnl:.2f}")
-                        self.position = None
-        
-        # Close any remaining position
-        if self.position is not None:
-            current_price = df.iloc[-1]['close']
-            bars_held = len(df) - 1 - self.position['entry_idx']
-            
-            if self.position['side'] == 'long':
-                pnl = (current_price - self.position['entry_price']) * self.position['shares']
-            else:
-                pnl = (self.position['entry_price'] - current_price) * self.position['shares']
-            
-            self.capital += pnl
-            self.trades.append({
-                'side': self.position['side'],
-                'entry_time': self.position['entry_time'],
-                'entry_price': self.position['entry_price'],
-                'exit_time': df.iloc[-1]['timestamp'],
-                'exit_price': current_price,
-                'shares': self.position['shares'],
-                'pnl': pnl,
-                'exit_reason': 'end_of_data',
-                'holding_bars': bars_held,
-                'ml_confidence': self.position['ml_confidence'],
-                'supertrend_signal': self.position['supertrend_signal'],
-                'combined_signal': self.position['combined_signal']
+            # Record signal
+            self.signal_history.append({
+                'date': current_row.name,
+                'price': current_price,
+                'signal': signal,
+                'signal_strength': signal_strength,
+                'risk_multiplier': risk_multiplier,
+                'capital': self.capital
             })
         
-        # Convert trades to DataFrame
-        if self.trades:
-            trades_df = pd.DataFrame(self.trades)
-            return trades_df, self.capital
-        else:
-            return pd.DataFrame(), self.capital
+        # Close any remaining position
+        if self.current_position is not None:
+            self.close_position(df.iloc[-1]['close'], self.current_position['type'])
+        
+        # Calculate performance
+        performance = self.calculate_performance_metrics()
+        self.print_performance_summary(performance)
+        
+        return performance
+    
+    def execute_ml_trade(self, signal: int, current_row: pd.Series, signal_strength: float, risk_multiplier: float):
+        """Execute trade with ML enhancements"""
+        entry_price = current_row['close']
+        atr = current_row['atr']
+        vix_ratio = current_row.get('vix_ratio', 1.0)
+        
+        # Calculate dynamic stop loss
+        stop_loss = self.calculate_dynamic_stop_loss(entry_price, signal, atr, vix_ratio)
+        
+        # Calculate position size with ML risk management
+        shares = self.calculate_position_size(entry_price, stop_loss, risk_multiplier)
+        
+        # Calculate trade value
+        trade_value = shares * entry_price
+        
+        if trade_value > self.capital:
+            shares = int(self.capital / entry_price)
+            trade_value = shares * entry_price
+        
+        # Record trade
+        position_type = 'long' if signal == 1 else 'short'
+        
+        self.current_position = {
+            'type': position_type,
+            'entry_price': entry_price,
+            'shares': shares,
+            'stop_loss': stop_loss,
+            'entry_date': current_row.name,
+            'signal_strength': signal_strength,
+            'risk_multiplier': risk_multiplier
+        }
+        
+        # Update capital
+        self.capital -= trade_value
+        
+        print(f"📈 {position_type.upper()} Entry: {shares} shares @ ${entry_price:.2f}")
+        print(f"   Stop Loss: ${stop_loss:.2f}, Signal Strength: {signal_strength:.2f}")
+        print(f"   Risk Multiplier: {risk_multiplier:.2f}, Capital: ${self.capital:.2f}")
+    
+    def check_exit_conditions(self, current_row: pd.Series) -> bool:
+        """Check if position should be closed"""
+        if self.current_position is None:
+            return False
+        
+        current_price = current_row['close']
+        stop_loss = self.current_position['stop_loss']
+        position_type = self.current_position['type']
+        
+        # Stop loss hit
+        if position_type == 'long' and current_price <= stop_loss:
+            return True
+        elif position_type == 'short' and current_price >= stop_loss:
+            return True
+        
+        # Take profit (2:1 risk-reward)
+        entry_price = self.current_position['entry_price']
+        if position_type == 'long':
+            take_profit = entry_price + (entry_price - stop_loss) * 2
+            if current_price >= take_profit:
+                return True
+        else:  # short
+            take_profit = entry_price - (stop_loss - entry_price) * 2
+            if current_price <= take_profit:
+                return True
+        
+        return False
+    
+    def close_position(self, current_price: float, position_type: str):
+        """Close current position"""
+        if self.current_position is None:
+            return
+        
+        shares = self.current_position['shares']
+        entry_price = self.current_position['entry_price']
+        entry_date = self.current_position['entry_date']
+        
+        # Calculate P&L
+        if position_type == 'long':
+            pnl = (current_price - entry_price) * shares
+        else:  # short
+            pnl = (entry_price - current_price) * shares
+        
+        # Update capital
+        trade_value = shares * current_price
+        self.capital += trade_value + pnl
+        
+        # Record trade
+        self.trades.append({
+            'entry_date': entry_date,
+            'exit_date': pd.Timestamp.now(),
+            'type': position_type,
+            'entry_price': entry_price,
+            'exit_price': current_price,
+            'shares': shares,
+            'pnl': pnl,
+            'return_pct': (pnl / (entry_price * shares)) * 100
+        })
+        
+        print(f"📉 {position_type.upper()} Exit: {shares} shares @ ${current_price:.2f}")
+        print(f"   P&L: ${pnl:.2f} ({self.trades[-1]['return_pct']:.2f}%)")
+        print(f"   Capital: ${self.capital:.2f}")
+        
+        self.current_position = None
+    
+    def calculate_performance_metrics(self) -> Dict[str, Any]:
+        """Calculate comprehensive performance metrics"""
+        if not self.trades:
+            return {
+                'final_capital': self.capital,
+                'total_return': 0,
+                'total_return_pct': 0,
+                'num_trades': 0,
+                'win_rate': 0,
+                'avg_win': 0,
+                'avg_loss': 0,
+                'max_drawdown': 0,
+                'sharpe_ratio': 0,
+                'profit_factor': 0
+            }
+        
+        # Basic metrics
+        final_capital = self.capital
+        total_return = final_capital - self.initial_capital
+        total_return_pct = (total_return / self.initial_capital) * 100
+        num_trades = len(self.trades)
+        
+        # Win/loss analysis
+        winning_trades = [t for t in self.trades if t['pnl'] > 0]
+        losing_trades = [t for t in self.trades if t['pnl'] <= 0]
+        
+        win_rate = len(winning_trades) / num_trades * 100 if num_trades > 0 else 0
+        avg_win = np.mean([t['pnl'] for t in winning_trades]) if winning_trades else 0
+        avg_loss = np.mean([t['pnl'] for t in losing_trades]) if losing_trades else 0
+        
+        # Drawdown calculation
+        capital_curve = [self.initial_capital]
+        for trade in self.trades:
+            capital_curve.append(capital_curve[-1] + trade['pnl'])
+        
+        max_drawdown = self.calculate_max_drawdown(capital_curve)
+        
+        # Risk metrics
+        returns = [t['return_pct'] for t in self.trades]
+        sharpe_ratio = np.mean(returns) / np.std(returns) if np.std(returns) > 0 else 0
+        
+        # Profit factor
+        gross_profit = sum([t['pnl'] for t in winning_trades]) if winning_trades else 0
+        gross_loss = abs(sum([t['pnl'] for t in losing_trades])) if losing_trades else 0
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        
+        return {
+            'final_capital': final_capital,
+            'total_return': total_return,
+            'total_return_pct': total_return_pct,
+            'num_trades': num_trades,
+            'win_rate': win_rate,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss,
+            'max_drawdown': max_drawdown,
+            'sharpe_ratio': sharpe_ratio,
+            'profit_factor': profit_factor,
+            'trades': self.trades
+        }
+    
+    def calculate_max_drawdown(self, capital_curve: List[float]) -> float:
+        """Calculate maximum drawdown"""
+        peak = capital_curve[0]
+        max_dd = 0
+        
+        for capital in capital_curve:
+            if capital > peak:
+                peak = capital
+            dd = (peak - capital) / peak
+            if dd > max_dd:
+                max_dd = dd
+        
+        return max_dd * 100
+    
+    def print_performance_summary(self, performance: Dict[str, Any]):
+        """Print detailed performance summary"""
+        print("\n" + "="*60)
+        print("🎯 ENHANCED ML STRATEGY PERFORMANCE SUMMARY")
+        print("="*60)
+        
+        print(f"💰 Final Capital: ${performance['final_capital']:,.2f}")
+        print(f"📈 Total Return: ${performance['total_return']:,.2f} ({performance['total_return_pct']:.2f}%)")
+        print(f"🎯 Baseline Target: $110,024.28")
+        print(f"✅ Target Achieved: {'YES' if performance['final_capital'] > 110024.28 else 'NO'}")
+        
+        print(f"\n📊 Trading Statistics:")
+        print(f"   Number of Trades: {performance['num_trades']}")
+        print(f"   Win Rate: {performance['win_rate']:.1f}%")
+        print(f"   Average Win: ${performance['avg_win']:.2f}")
+        print(f"   Average Loss: ${performance['avg_loss']:.2f}")
+        
+        print(f"\n🛡️ Risk Metrics:")
+        print(f"   Maximum Drawdown: {performance['max_drawdown']:.2f}%")
+        print(f"   Sharpe Ratio: {performance['sharpe_ratio']:.2f}")
+        print(f"   Profit Factor: {performance['profit_factor']:.2f}")
+        
+        # Compare with baseline
+        baseline_return = 110024.28 - 50000
+        current_return = performance['total_return']
+        improvement = current_return - baseline_return
+        
+        print(f"\n📈 Performance vs Baseline:")
+        print(f"   Baseline Return: ${baseline_return:,.2f}")
+        print(f"   Current Return: ${current_return:,.2f}")
+        print(f"   Improvement: ${improvement:,.2f} ({improvement/baseline_return*100:.1f}%)")
+        
+        print("="*60)
 
 def main():
-    """Main function to run the enhanced strategy"""
-    print("🚀 Enhanced SuperTrend + ML Trading Strategy")
-    print("=" * 50)
+    """Main execution function"""
+    print("🚀 Enhanced SuperTrend ML Strategy")
+    print("="*50)
     
     # Load data
-    import os
-    cache_file = 'data/cache_SOXL_10Min.csv'
-    if not os.path.exists(cache_file):
-        print(f"❌ Cache file not found: {cache_file}")
+    try:
+        df = pd.read_csv('data/cache_SOXL_10Min.csv')
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df.set_index('timestamp', inplace=True)
+        print(f"✅ Data loaded: {len(df)} records from {df.index[0]} to {df.index[-1]}")
+    except Exception as e:
+        print(f"❌ Error loading data: {e}")
         return
     
-    # Load and prepare data
-    df = pd.read_csv(cache_file)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = df.sort_values('timestamp').reset_index(drop=True)
+    # Run enhanced strategy
+    strategy = EnhancedSuperTrendMLStrategy()
+    performance = strategy.run_strategy(df)
     
-    print(f"✅ Loaded {len(df)} rows from {cache_file}")
-    print(f"📅 Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
-    
-    # Initialize strategy
-    strategy = EnhancedSuperTrendMLStrategy(
-        initial_capital=100000,
-        risk_per_trade=0.02,
-        ml_confidence_threshold=0.6,
-        supertrend_weight=0.7,
-        ml_weight=0.3
-    )
-    
-    # Run strategy
-    trades_df, final_capital = strategy.run_strategy(df)
-    
-    # Display results
-    print(f"\n" + "="*60)
-    print(f"📊 ENHANCED SUPERTREND + ML STRATEGY RESULTS")
-    print(f"="*60)
-    
-    if not trades_df.empty:
-        print(f"💰 Initial Capital: ${strategy.initial_capital:,.2f}")
-        print(f"💰 Final Capital: ${final_capital:,.2f}")
-        print(f"📈 Total PnL: ${final_capital - strategy.initial_capital:,.2f}")
-        print(f"📊 Total Return: {((final_capital / strategy.initial_capital) - 1) * 100:.2f}%")
-        print(f"🔄 Number of Trades: {len(trades_df)}")
-        print(f"🎯 Win Rate: {(len(trades_df[trades_df['pnl'] > 0]) / len(trades_df) * 100):.1f}%")
-        print(f"📊 Average Trade: ${trades_df['pnl'].mean():,.2f}")
-        print(f"🤖 Average ML Confidence: {trades_df['ml_confidence'].mean():.3f}")
-        print(f"⏱️ Average Holding Period: {trades_df['holding_bars'].mean():.1f} bars")
-        
-        # Exit reason analysis
-        stop_loss_trades = len(trades_df[trades_df['exit_reason'] == 'stop_loss'])
-        supertrend_exits = len(trades_df[trades_df['exit_reason'] == 'supertrend_exit'])
-        print(f"🛑 Stop Loss Trades: {stop_loss_trades}")
-        print(f"🔄 SuperTrend Exits: {supertrend_exits}")
-        
-        # Performance visualization
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
-        
-        # Cumulative PnL
-        cumulative_pnl = trades_df['pnl'].cumsum()
-        ax1.plot(range(len(cumulative_pnl)), cumulative_pnl, linewidth=2, color='blue')
-        ax1.set_title('Cumulative PnL Over Time', fontsize=14, fontweight='bold')
-        ax1.set_xlabel('Trade Number', fontsize=12)
-        ax1.set_ylabel('Cumulative PnL ($)', fontsize=12)
-        ax1.grid(True, alpha=0.3)
-        
-        # PnL distribution
-        ax2.hist(trades_df['pnl'], bins=20, alpha=0.7, color='green', edgecolor='black')
-        ax2.set_title('PnL Distribution', fontsize=14, fontweight='bold')
-        ax2.set_xlabel('PnL ($)', fontsize=12)
-        ax2.set_ylabel('Frequency', fontsize=12)
-        ax2.grid(True, alpha=0.3)
-        
-        # ML Confidence vs PnL
-        ax3.scatter(trades_df['ml_confidence'], trades_df['pnl'], alpha=0.6, color='purple')
-        ax3.set_title('ML Confidence vs PnL', fontsize=14, fontweight='bold')
-        ax3.set_xlabel('ML Confidence', fontsize=12)
-        ax3.set_ylabel('PnL ($)', fontsize=12)
-        ax3.grid(True, alpha=0.3)
-        
-        # Holding period vs PnL
-        ax4.scatter(trades_df['holding_bars'], trades_df['pnl'], alpha=0.6, color='orange')
-        ax4.set_title('Holding Period vs PnL', fontsize=14, fontweight='bold')
-        ax4.set_xlabel('Holding Period (bars)', fontsize=12)
-        ax4.set_ylabel('PnL ($)', fontsize=12)
-        ax4.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plt.show()
-        
-    else:
-        print("❌ No trades executed")
+    # Save results
+    results_df = pd.DataFrame(strategy.trades)
+    if not results_df.empty:
+        results_df.to_csv('enhanced_ml_results.csv', index=False)
+        print(f"✅ Results saved to enhanced_ml_results.csv")
 
 if __name__ == "__main__":
     main() 

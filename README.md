@@ -134,10 +134,10 @@ BACKTEST
 
 python analyze_trades_supertrend.py --symbol SOXL --timeframe 10Min --initial_capital 1000 --start_date 2020-01-01 --end_date 2025-06-25 --enhanced --compounded --optimize  --risk_per_trade 0.01 --stop_loss_range 1 12 --optimization_iterations 100
 
-python analyze_trades_supertrend.py --symbol CYN --timeframe 10Min --initial_capital 1000 --start_date 2020-01-01 --end_date 2025-06-25 --enhanced --compounded --optimize  --risk_per_trade 0.01  --stop_loss_range 1 12 --optimization_iterations 100
+python analyze_trades_supertrend.py --symbol SOXL --timeframe 10Min --start_date 2022-06-28 --end_date 2025-06-28
 
 # NON-Optimzied  1 yr
-python analyze_trades_supertrend.py --symbol SOXL --timeframe 10Min --initial_capital 50000 --start_date 2024-06-01 --end_date 2025-06-26 --enhanced --skip_optimization --compounded --risk_per_trade 0.01 --stop_loss_pct 1.0
+python analyze_trades_supertrend.py --symbol SOXL --timeframe 10Min --initial_capital 1000 --start_date 2022-06-28 --end_date 2025-06-28 --enhanced --skip_optimization --compounded --risk_per_trade 0.01 --stop_loss_pct 1.0
 
 # TQQQ
 python analyze_trades_supertrend.py --symbol TQQQ --timeframe 10Min --initial_capital 1000 --start_date 2024-06-01 --end_date 2025-06-25 --enhanced --skip_optimization --compounded

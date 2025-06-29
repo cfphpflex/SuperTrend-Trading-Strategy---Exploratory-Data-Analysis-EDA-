@@ -192,7 +192,8 @@ class EnhancedSuperTrendAnalyzer:
         self.capital = initial_capital
         self.risk_per_trade_pct = risk_per_trade_pct  # ENHANCED: Risk-based sizing
         
-        # === SUPER TREND PARAMETERS (OPTIMIZED FROM BACKTESTING) ===
+        # === SUPER TREND PARAMETERS (OPTIMIZED FROM GRID SEARCH) ===
+        # Best configuration: period=12, multiplier=2.0, ADX>30, volume_ratio=1.0
         # Adjust parameters based on timeframe
         if timeframe == '5Min':
             self.stop_loss_pct = 0.05      # 5% stop loss (optimized for 5Min)
@@ -204,8 +205,12 @@ class EnhancedSuperTrendAnalyzer:
             self.stop_loss_pct = 0.10      # Default 10% stop loss
             self.min_holding_bars = 20     # Default minimum holding
         
-        self.supertrend_period = 10    # SuperTrend period
-        self.supertrend_multiplier = 3 # SuperTrend multiplier
+        # GRID SEARCH OPTIMIZED PARAMETERS
+        self.supertrend_period = 12        # SuperTrend period (optimized from 10)
+        self.supertrend_multiplier = 2.0   # SuperTrend multiplier (optimized from 3.0)
+        self.adx_threshold = 30            # ADX threshold for trend strength
+        self.volume_ratio_threshold = 1.0  # Volume ratio threshold
+        self.atr_stop_multiplier = 1.8     # ATR stop loss multiplier
         
         # Trading state
         self.current_state = PositionState.NONE
@@ -221,8 +226,9 @@ class EnhancedSuperTrendAnalyzer:
         self.market_timezone = pytz.timezone('America/New_York')
         
         print(f"🚀 Enhanced SuperTrend Analyzer initialized for {symbol} on {timeframe} timeframe")
-        print(f"💰 Risk Management: SL={self.stop_loss_pct*100:.1f}%, Min Holding={self.min_holding_bars} bars")
+        print(f"💰 Risk Management: ATR Stop Loss (1.8x ATR), Min Holding={self.min_holding_bars} bars")
         print(f"📊 SuperTrend: Period={self.supertrend_period}, Multiplier={self.supertrend_multiplier}")
+        print(f"🎯 Grid Search Optimized: ADX>{self.adx_threshold}, Volume>{self.volume_ratio_threshold}")
         print(f"🛡️ Risk per Trade: {self.risk_per_trade_pct*100:.1f}% of capital")
         print(f"🛡️ Choppiness Filters: {'ENABLED' if enable_choppiness_filters else 'DISABLED'}")
     
@@ -290,42 +296,111 @@ class EnhancedSuperTrendAnalyzer:
         df['supertrend'] = supertrend
         return df
     
+    def calculate_adx(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """Calculate ADX (Average Directional Index) for trend strength"""
+        df = df.copy()
+        
+        # Calculate True Range (TR)
+        df['tr1'] = abs(df['high'] - df['low'])
+        df['tr2'] = abs(df['high'] - df['close'].shift(1))
+        df['tr3'] = abs(df['low'] - df['close'].shift(1))
+        df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
+        
+        # Calculate ATR
+        df['atr'] = df['tr'].rolling(window=period).mean()
+        
+        # Calculate +DM and -DM
+        df['high_diff'] = df['high'] - df['high'].shift(1)
+        df['low_diff'] = df['low'].shift(1) - df['low']
+        
+        df['plus_dm'] = np.where((df['high_diff'] > df['low_diff']) & (df['high_diff'] > 0), df['high_diff'], 0)
+        df['minus_dm'] = np.where((df['low_diff'] > df['high_diff']) & (df['low_diff'] > 0), df['low_diff'], 0)
+        
+        # Calculate smoothed values
+        df['plus_di'] = 100 * (df['plus_dm'].rolling(window=period).mean() / df['atr'])
+        df['minus_di'] = 100 * (df['minus_dm'].rolling(window=period).mean() / df['atr'])
+        
+        # Calculate DX and ADX
+        df['dx'] = 100 * abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])
+        df['adx'] = df['dx'].rolling(window=period).mean()
+        
+        # Clean up temporary columns
+        df = df.drop(['tr1', 'tr2', 'tr3', 'tr', 'high_diff', 'low_diff', 'plus_dm', 'minus_dm', 'dx'], axis=1)
+        
+        return df
+    
     def should_enter_long(self, df: pd.DataFrame, i: int) -> bool:
-        """Check if we should enter a long position"""
-        if i < 1:
+        """Check if we should enter a long position with grid search optimized filters"""
+        if i < 20:  # Need enough data for indicators
             return False
         
+        # SuperTrend signal
         prev_close = df['close'].iloc[i-1]
         prev_st = df['supertrend'].iloc[i-1]
         close = df['close'].iloc[i]
         st = df['supertrend'].iloc[i]
         
         # Long entry: price crosses above SuperTrend
-        return prev_close < prev_st and close > st
-    
-    def should_enter_short(self, df: pd.DataFrame, i: int) -> bool:
-        """Check if we should enter a short position"""
-        if i < 1:
+        supertrend_signal = prev_close < prev_st and close > st
+        
+        if not supertrend_signal:
             return False
         
+        # ADX filter: only trade strong trends
+        adx = df['adx'].iloc[i]
+        if adx < self.adx_threshold:
+            return False
+        
+        # Volume filter: only trade with sufficient volume
+        volume_ratio = df['volume_ratio'].iloc[i]
+        if volume_ratio < self.volume_ratio_threshold:
+            return False
+        
+        return True
+    
+    def should_enter_short(self, df: pd.DataFrame, i: int) -> bool:
+        """Check if we should enter a short position with grid search optimized filters"""
+        if i < 20:  # Need enough data for indicators
+            return False
+        
+        # SuperTrend signal
         prev_close = df['close'].iloc[i-1]
         prev_st = df['supertrend'].iloc[i-1]
         close = df['close'].iloc[i]
         st = df['supertrend'].iloc[i]
         
         # Short entry: price crosses below SuperTrend
-        return prev_close > prev_st and close < st
+        supertrend_signal = prev_close > prev_st and close < st
+        
+        if not supertrend_signal:
+            return False
+        
+        # ADX filter: only trade strong trends
+        adx = df['adx'].iloc[i]
+        if adx < self.adx_threshold:
+            return False
+        
+        # Volume filter: only trade with sufficient volume
+        volume_ratio = df['volume_ratio'].iloc[i]
+        if volume_ratio < self.volume_ratio_threshold:
+            return False
+        
+        return True
     
     def should_exit_long(self, df: pd.DataFrame, i: int, entry_idx: int) -> Tuple[bool, ExitReason]:
-        """Check if we should exit a long position"""
+        """Check if we should exit a long position with ATR-based stop loss"""
         if i < 1 or entry_idx is None:
             return False, ExitReason.ERROR_EXIT
         
         close = df['close'].iloc[i]
         entry_price = df['close'].iloc[entry_idx]
         
-        # Stop loss check
-        if close <= entry_price * (1 - self.stop_loss_pct):
+        # ATR-based stop loss check
+        atr = df['atr'].iloc[i]
+        stop_loss_distance = atr * self.atr_stop_multiplier
+        stop_loss_price = entry_price - stop_loss_distance
+        
+        if close <= stop_loss_price:
             return True, ExitReason.STOP_LOSS
         
         # Minimum holding period check
@@ -341,15 +416,19 @@ class EnhancedSuperTrendAnalyzer:
         return False, ExitReason.ERROR_EXIT
     
     def should_exit_short(self, df: pd.DataFrame, i: int, entry_idx: int) -> Tuple[bool, ExitReason]:
-        """Check if we should exit a short position"""
+        """Check if we should exit a short position with ATR-based stop loss"""
         if i < 1 or entry_idx is None:
             return False, ExitReason.ERROR_EXIT
         
         close = df['close'].iloc[i]
         entry_price = df['close'].iloc[entry_idx]
         
-        # Stop loss check
-        if close >= entry_price * (1 + self.stop_loss_pct):
+        # ATR-based stop loss check
+        atr = df['atr'].iloc[i]
+        stop_loss_distance = atr * self.atr_stop_multiplier
+        stop_loss_price = entry_price + stop_loss_distance
+        
+        if close >= stop_loss_price:
             return True, ExitReason.STOP_LOSS
         
         # Minimum holding period check
@@ -364,17 +443,20 @@ class EnhancedSuperTrendAnalyzer:
         
         return False, ExitReason.ERROR_EXIT
     
-    def calculate_risk_based_shares(self, entry_price: float, current_capital: float = None) -> int:
-        """Calculate position size based on risk management"""
+    def calculate_risk_based_shares(self, entry_price: float, current_capital: float = None, atr: float = None) -> int:
+        """Calculate position size based on ATR-based risk management"""
         if current_capital is None:
             current_capital = self.capital
         
         # Calculate risk amount
         risk_amount = current_capital * self.risk_per_trade_pct
         
-        # Calculate shares based on stop loss
-        stop_loss_amount = entry_price * self.stop_loss_pct
-        shares = int(risk_amount / stop_loss_amount)
+        # Calculate shares based on ATR stop loss
+        if atr is None:
+            atr = entry_price * 0.01  # Fallback to 1% if ATR not provided
+        
+        stop_loss_distance = atr * self.atr_stop_multiplier
+        shares = int(risk_amount / stop_loss_distance)
         
         # Ensure minimum position size
         min_shares = 1
@@ -412,6 +494,13 @@ class EnhancedSuperTrendAnalyzer:
         
         # Calculate SuperTrend
         df = self.calculate_supertrend(df)
+        
+        # Calculate ADX
+        df = self.calculate_adx(df)
+        
+        # Calculate volume features
+        df['volume_ma'] = df['volume'].rolling(window=20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_ma']
         
         # Initialize variables
         position = 0  # 0: no position, 1: long, -1: short
